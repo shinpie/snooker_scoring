@@ -55,6 +55,15 @@
   /* ---------- layout ---------- */
   main{max-width:840px;margin:0 auto;padding:10px 16px 28px;display:flex;flex-direction:column;gap:10px}
 
+  /* rotated = two players side by side, centre strip drops to a full row below */
+  main.rotated{flex-direction:row;flex-wrap:wrap;align-items:flex-start;max-width:1100px}
+  main.rotated .panel{flex:1 1 320px;min-width:0}
+  main.rotated .centre{flex:1 1 100%;order:3}
+  @media (max-width:720px){
+    main.rotated{flex-direction:column}
+    main.rotated .panel{flex:1 1 auto;width:100%}
+  }
+
   /* ---------- player panels ---------- */
   .panel{
     position:relative;border-radius:20px;padding:14px 14px 12px;
@@ -141,6 +150,13 @@
     background:rgba(212,101,79,.35);font-size:11px;font-weight:800;
   }
   .btn.foul .opp{font-weight:500;color:rgba(255,255,255,.55);font-size:11.5px}
+
+  .btn.freeball{background:rgba(231,198,109,.14);border-color:rgba(231,198,109,.42);color:#f4e2b0}
+  .btn.freeball:hover{background:rgba(231,198,109,.24)}
+  .btn.freeball .fb{
+    display:inline-grid;place-items:center;width:16px;height:16px;border-radius:50%;
+    background:rgba(231,198,109,.35);font-size:11px;font-weight:800;color:#241a00;
+  }
 
   /* ---------- centre strip ---------- */
   .centre{
@@ -262,6 +278,9 @@
   .fp-btns .btn{min-width:56px;min-height:46px;justify-content:center;font-size:16px;font-weight:800}
   .fp-btns .btn.cancel{min-width:auto;font-size:13px;font-weight:600}
 
+  .confirm-box{max-width:440px}
+  .confirm-msg{font-size:14.5px;line-height:1.55;color:var(--ink)}
+
   .foot{
     max-width:840px;margin:0 auto;padding:0 18px 26px;
     color:rgba(255,255,255,.30);font-size:11.5px;text-align:center;line-height:1.6;
@@ -284,6 +303,7 @@
     <span class="sub">Full 14.7 · tap a ball on the player you are scoring</span>
   </div>
   <div class="tools">
+    <button class="btn ghost" id="btnRotate" data-act="rotate" aria-pressed="false">↔ Rotate</button>
     <button class="btn ghost" id="btnUndo" data-act="undo">↶ Undo</button>
     <button class="btn ghost" id="btnFinish" data-act="finish">⏹ Finish</button>
     <button class="btn ghost" data-act="stats">📊 Stats</button>
@@ -299,7 +319,8 @@
 
 <footer class="foot">
   Tap a ball in the top or bottom panel to score that player. <b>Foul</b> opens a 4–7 picker and awards the points to the other player.
-  <b>End visit</b> closes the current break (used for statistics). Everything is saved in this browser and can be exported as JSON.
+  <b>Free ball</b> opens a 1–7 picker and adds those points to that player. <b>Rotate</b> lays the two players side by side.
+  <b>End visit</b> closes the current break (used for statistics). After the final red, if the striker does not pot a colour (an <b>End visit</b> or <b>Foul</b>), the board moves straight to the final colour-potting sequence. Everything is saved in this browser and can be exported as JSON.
 </footer>
 
 <!-- foul value picker -->
@@ -313,6 +334,35 @@
       <button class="btn danger" data-act="foul-v" data-v="6">6</button>
       <button class="btn danger" data-act="foul-v" data-v="7">7</button>
       <button class="btn ghost cancel" data-act="foul-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- free ball value picker -->
+<div id="freePicker" class="foul-picker hidden" aria-hidden="true">
+  <div class="fp-backdrop" data-act="free-cancel"></div>
+  <div class="fp-card" role="dialog" aria-label="Free ball points">
+    <div class="fp-title" id="fbTitle"></div>
+    <div class="fp-btns">
+      <button class="btn primary" data-act="free-v" data-v="1">1</button>
+      <button class="btn primary" data-act="free-v" data-v="2">2</button>
+      <button class="btn primary" data-act="free-v" data-v="3">3</button>
+      <button class="btn primary" data-act="free-v" data-v="4">4</button>
+      <button class="btn primary" data-act="free-v" data-v="5">5</button>
+      <button class="btn primary" data-act="free-v" data-v="6">6</button>
+      <button class="btn primary" data-act="free-v" data-v="7">7</button>
+      <button class="btn ghost cancel" data-act="free-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- in-app confirm dialog -->
+<div id="confirmOverlay" class="overlay hidden" aria-hidden="true">
+  <div class="modal-inner confirm-box" role="dialog" aria-label="Confirm">
+    <div id="confirmMsg" class="confirm-msg"></div>
+    <div class="r-actions" style="margin-top:14px">
+      <button class="btn primary" data-act="confirm-yes">Confirm</button>
+      <button class="btn ghost" data-act="confirm-no">Cancel</button>
     </div>
   </div>
 </div>
@@ -362,10 +412,15 @@ const COLOURS = [
   { id:'pink',   name:'Pink',   v:6 },
   { id:'black',  name:'Black',  v:7 }
 ];
-const LS = { frame:'snooker.frame.v1', history:'snooker.history.v1', match:'snooker.match.v1' };
+const LS = { frame:'snooker.frame.v1', history:'snooker.history.v1', match:'snooker.match.v1', view:'snooker.view.v1' };
 
 const ui = { statsOpen:false, tab:'summary' };
 let foulFor = null;          // panel index that is committing a foul
+let freeFor = null;          // panel index that is scoring a free ball
+let confirmCb = null;        // callback for the in-app confirm dialog
+let view = loadJSON(LS.view);
+view = (view && typeof view === 'object') ? { rot: !!view.rot } : { rot:false };
+function saveView(){ saveJSON(LS.view, view); }
 let statusText = '';
 let undoStack = [];
 
@@ -405,6 +460,7 @@ function newFrame(names, matchId){
     visit: { player:null, pts:0 },
     breaks: [[],[]],
     fouls: [0,0],
+    freeBalls: [0,0],
     ended: false,
     endedReason: null,
     saved: false,
@@ -419,6 +475,9 @@ function normalizeFrame(f){
   if (!Array.isArray(out.breaks[0])) out.breaks[0] = [];
   if (!Array.isArray(out.breaks[1])) out.breaks[1] = [];
   if (!Array.isArray(out.potted)) out.potted = [];
+  if (!Array.isArray(out.freeBalls)) out.freeBalls = [0,0];
+  if (!Array.isArray(out.freeBalls[0])) out.freeBalls[0] = 0;
+  if (!Array.isArray(out.freeBalls[1])) out.freeBalls[1] = 0;
   if (!out.visit || typeof out.visit !== 'object') out.visit = { player:null, pts:0 };
   if (typeof out.phase !== 'string') out.phase = out.reds > 0 ? 'reds' : 'sequence';
   if (typeof out.reds !== 'number') out.reds = REDS;
@@ -453,10 +512,20 @@ function canPot(pi, ballId){
   if (frame.ended) return false;
   if (ballId === 'red') return frame.reds > 0;
   if (frame.phase === 'sequence'){
-    const want = COLOURS[frame.colourIdx];
-    return !!want && want.id === ballId;
+    // Final colours: only the not-yet-pocketed colours are selectable, so a
+    // player who cannot/did-not pot the designated ball is never hard-locked.
+    return frame.potted.indexOf(ballId) === -1;
   }
+  // 'reds' or 'respot' — any colour is selectable (colours are respotted),
+  // so after the last red the striker is simply "on a colour", free to choose.
   return true;
+}
+// Lowest-indexed colour still to be pocketed in the final sequence (for the hint).
+function nextSequenceIdx(){
+  for (let i = 0; i < COLOURS.length; i++){
+    if (frame.potted.indexOf(COLOURS[i].id) === -1) return i;
+  }
+  return COLOURS.length;
 }
 function pot(pi, ballId){
   if (!canPot(pi, ballId)) return;
@@ -467,19 +536,22 @@ function pot(pi, ballId){
   if (ballId === 'red'){
     frame.reds = Math.max(0, frame.reds - 1);
     frame.ballOn = 'colour';
+    // After the last red we go to a non-forcing "colour (any, respotted)" stage.
     if (frame.reds === 0) frame.phase = 'respot';
   } else if (frame.phase === 'sequence'){
-    frame.potted.push(ballId);
-    frame.colourIdx += 1;
+    if (frame.potted.indexOf(ballId) === -1) frame.potted.push(ballId);
+    frame.colourIdx = nextSequenceIdx();
   } else if (frame.phase === 'respot'){
+    // The colour potted straight after the last red is respotted (returned to the
+    // table), so it is NOT removed — it does not count toward the final sequence.
     frame.phase = 'sequence';
-    frame.colourIdx = 0;
+    frame.colourIdx = nextSequenceIdx();
   } else {
     frame.ballOn = 'red';
   }
 
   addPoints(pi, value);
-  if (frame.phase === 'sequence' && frame.colourIdx >= COLOURS.length){
+  if (frame.phase === 'sequence' && frame.potted.length >= COLOURS.length){
     finishFrame('completed', true);
     statusText = 'Frame complete — all balls potted';
   } else {
@@ -489,10 +561,24 @@ function pot(pi, ballId){
   render();
 }
 
+function freeBall(pi, value){
+  if (frame.ended) return;
+  if (!(value >= 1 && value <= 7)) return;
+  snap();
+  addPoints(pi, value);
+  frame.freeBalls[pi] += 1;
+  statusText = 'Free ball for ' + frame.names[pi] + ' (+' + value + ')';
+  save();
+  render();
+}
+
 function endVisit(pi){
   if (frame.ended) return;
   snap();
   closeVisit();
+  // After the final red, if the striker does NOT pot a colour and ends the
+  // visit, go directly to the colour-potting sequence (skip the forced respot).
+  if (frame.phase === 'respot'){ frame.phase = 'sequence'; frame.colourIdx = nextSequenceIdx(); }
   frame.turn = 1 - pi;
   if (frame.phase === 'reds') frame.ballOn = 'red';
   statusText = frame.names[pi] + ' ends visit — ' + frame.names[frame.turn] + ' to play';
@@ -505,6 +591,8 @@ function foul(pi, value){
   snap();
   frame.fouls[pi] += 1;
   closeVisit();
+  // Same as endVisit: a foul straight after the final red moves on to colours.
+  if (frame.phase === 'respot'){ frame.phase = 'sequence'; frame.colourIdx = nextSequenceIdx(); }
   const opp = 1 - pi;
   frame.scores[opp] += value;
   frame.turn = opp;
@@ -535,6 +623,20 @@ function undo(){
   statusText = 'Undone';
   save();
   render();
+}
+
+/* ---------- in-app confirm (native confirm()/alert() are blocked in some webviews) ---------- */
+function askConfirm(message, onYes){
+  confirmCb = onYes || null;
+  const o = document.getElementById('confirmOverlay');
+  const m = document.getElementById('confirmMsg');
+  if (m) m.textContent = message;
+  if (o){ o.classList.remove('hidden'); o.setAttribute('aria-hidden', 'false'); }
+}
+function closeConfirm(){
+  confirmCb = null;
+  const o = document.getElementById('confirmOverlay');
+  if (o){ o.classList.add('hidden'); o.setAttribute('aria-hidden', 'true'); }
 }
 
 /* ---------- frame record ---------- */
@@ -572,17 +674,25 @@ function saveAndNext(){
 }
 
 function discardFrame(){
-  if (!confirm('Discard this frame without saving it to history?')) return;
-  frame = newFrame(frame.names.slice(), frame.matchId);
-  undoStack = [];
-  statusText = 'Frame discarded';
-  save();
-  render();
+  askConfirm('Discard this frame without saving it to history?', function(){
+    frame = newFrame(frame.names.slice(), frame.matchId);
+    undoStack = [];
+    statusText = 'Frame discarded';
+    save();
+    render();
+  });
 }
 
 function newMatch(){
   const active = !frame.ended && (frame.scores[0] + frame.scores[1] > 0);
-  if (active && !confirm('Start a new match? The unfinished frame will be discarded.')) return;
+  if (active){
+    askConfirm('Start a new match? The unfinished frame will be discarded.', doNewMatch);
+  } else {
+    doNewMatch();
+  }
+}
+
+function doNewMatch(){
   match.id = 'm' + Date.now();
   match.startedAt = Date.now();
   saveJSON(LS.match, match);
@@ -625,7 +735,7 @@ function panelHTML(pi){
   return '' +
     '<div class="p-head">' +
       '<div class="p-id">' +
-        '<span class="p-pos">' + (pi === 0 ? '▲ Top' : '▼ Bottom') + '</span>' +
+        '<span class="p-pos">' + (view.rot ? (pi === 0 ? '◀ Left' : 'Right ▶') : (pi === 0 ? '▲ Top' : '▼ Bottom')) + '</span>' +
         '<input class="p-name" data-name="' + pi + '" value="' + escapeHtml(frame.names[pi]) + '" maxlength="20" aria-label="Player ' + (pi + 1) + ' name">' +
         (active ? '<span class="badge">to play</span>' : '') +
       '</div>' +
@@ -635,11 +745,15 @@ function panelHTML(pi){
       '<span>Best break <b>' + best + '</b></span>' +
       '<span>Visit <b>' + visitNow + '</b></span>' +
       '<span>Fouls <b>' + frame.fouls[pi] + '</b></span>' +
+      '<span>Free <b>' + (frame.freeBalls[pi] || 0) + '</b></span>' +
     '</div>' +
     '<div class="balls">' + ballsHTML(pi) + '</div>' +
     '<div class="p-actions">' +
       '<button class="btn foul" data-act="foul" data-player="' + pi + '" ' + (frame.ended ? 'disabled' : '') + '>' +
         '<span class="fi">!</span> Foul <span class="opp">→ ' + escapeHtml(frame.names[1 - pi]) + '</span>' +
+      '</button>' +
+      '<button class="btn freeball" data-act="freeball" data-player="' + pi + '" ' + (frame.ended ? 'disabled' : '') + '>' +
+        '<span class="fb">★</span> Free ball' +
       '</button>' +
       '<button class="btn ghost" data-act="pass" data-player="' + pi + '" ' + (frame.ended ? 'disabled' : '') + '>End visit</button>' +
     '</div>';
@@ -648,10 +762,10 @@ function panelHTML(pi){
 function ballOnLabel(){
   if (frame.ended) return 'frame over';
   if (frame.phase === 'sequence'){
-    const c = COLOURS[frame.colourIdx];
-    return c ? c.name : '—';
+    const i = nextSequenceIdx();
+    return (i < COLOURS.length ? COLOURS[i].name : '—') + ' (order suggested, any left can be potted)';
   }
-  if (frame.phase === 'respot') return 'Colour (respotted)';
+  if (frame.phase === 'respot') return 'Colour (any · respotted)';
   return frame.ballOn === 'red' ? 'Red' : 'Colour';
 }
 
@@ -812,6 +926,20 @@ function renderOverlays(){
     }
   }
 
+  const fb = document.getElementById('freePicker');
+  if (fb){
+    if (freeFor !== null && !frame.ended){
+      const t = document.getElementById('fbTitle');
+      if (t){
+        t.innerHTML = 'Free ball for <b>' + escapeHtml(frame.names[freeFor]) + '</b><br>add points (1–7) to this player';
+      }
+      fb.classList.remove('hidden');
+    } else {
+      fb.classList.add('hidden');
+      if (frame.ended) freeFor = null;
+    }
+  }
+
   const ro = document.getElementById('resultOverlay');
   if (ro){
     if (frame.ended && !frame.saved){
@@ -842,10 +970,17 @@ function renderOverlays(){
   if (u) u.disabled = undoStack.length === 0 && !frame.ended;
   const fin = document.getElementById('btnFinish');
   if (fin) fin.disabled = frame.ended;
+  const rot = document.getElementById('btnRotate');
+  if (rot){
+    rot.setAttribute('aria-pressed', view.rot ? 'true' : 'false');
+    rot.classList.toggle('primary', !!view.rot);
+  }
 }
 
 function render(){
   if (typeof document === 'undefined') return;
+  const app = document.getElementById('app');
+  if (app) app.classList.toggle('rotated', !!view.rot);
   const p0 = document.getElementById('panel0');
   const p1 = document.getElementById('panel1');
   const c = document.getElementById('centre');
@@ -934,12 +1069,13 @@ function handleImport(file){
 }
 
 function clearHistory(){
-  if (!history.length){ alert('No history to clear.'); return; }
-  if (!confirm('Delete all ' + history.length + ' saved frame(s)? This cannot be undone — export first if unsure.')) return;
-  history = [];
-  saveJSON(LS.history, history);
-  statusText = 'History cleared';
-  render();
+  if (!history.length){ statusText = 'No history to clear.'; render(); return; }
+  askConfirm('Delete all ' + history.length + ' saved frame(s)? This cannot be undone — export first if unsure.', function(){
+    history = [];
+    saveJSON(LS.history, history);
+    statusText = 'History cleared';
+    render();
+  });
 }
 
 /* ============================================================
@@ -959,7 +1095,7 @@ function onClick(e){
   switch (act){
     case 'pot':      pot(Number(el.getAttribute('data-player')), el.getAttribute('data-ball')); break;
     case 'pass':     endVisit(Number(el.getAttribute('data-player'))); break;
-    case 'foul':     foulFor = Number(el.getAttribute('data-player')); render(); break;
+    case 'foul':     foulFor = Number(el.getAttribute('data-player')); freeFor = null; render(); break;
     case 'foul-v':
       if (foulFor !== null){
         const pi = foulFor;
@@ -968,10 +1104,27 @@ function onClick(e){
       }
       break;
     case 'foul-cancel': foulFor = null; render(); break;
+    case 'freeball': freeFor = Number(el.getAttribute('data-player')); foulFor = null; render(); break;
+    case 'free-v':
+      if (freeFor !== null){
+        const pi = freeFor;
+        freeFor = null;
+        freeBall(pi, Number(el.getAttribute('data-v')));
+      }
+      break;
+    case 'free-cancel': freeFor = null; render(); break;
+    case 'rotate':   view.rot = !view.rot; saveView(); render(); break;
     case 'undo':     undo(); break;
     case 'finish':
-      if (!frame.ended && confirm('End the frame now and show the result?')) finishFrame('conceded');
+      if (!frame.ended) askConfirm('End the frame now and show the result?', function(){ finishFrame('conceded'); });
       break;
+    case 'confirm-yes': {
+      const cb = confirmCb;
+      closeConfirm();
+      if (cb) cb();
+      break;
+    }
+    case 'confirm-no': closeConfirm(); break;
     case 'stats':    ui.statsOpen = true; render(); break;
     case 'close-stats': ui.statsOpen = false; render(); break;
     case 'tab':      ui.tab = el.getAttribute('data-tab'); render(); break;
@@ -986,7 +1139,10 @@ function onClick(e){
 
 function onKey(e){
   if (e.key === 'Escape'){
-    if (foulFor !== null){ foulFor = null; render(); }
+    const co = document.getElementById('confirmOverlay');
+    if (co && !co.classList.contains('hidden')){ closeConfirm(); }
+    else if (foulFor !== null){ foulFor = null; render(); }
+    else if (freeFor !== null){ freeFor = null; render(); }
     else if (ui.statsOpen){ ui.statsOpen = false; render(); }
   }
 }
@@ -1026,6 +1182,7 @@ if (typeof module !== 'undefined' && module.exports){
   module.exports = {
     REDS: REDS, COLOURS: COLOURS,
     newFrame: newFrame, canPot: canPot, pot: pot, endVisit: endVisit, foul: foul,
+    freeBall: freeBall, nextSequenceIdx: nextSequenceIdx,
     finishFrame: finishFrame, undo: undo, record: record, saveAndNext: saveAndNext,
     discardFrame: discardFrame, clearHistory: clearHistory,
     getFrame: function(){ return frame; },
